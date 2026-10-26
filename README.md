@@ -2,7 +2,7 @@
 
 AI Data Incident Investigation & Recovery Platform.
 
-Phase 5 adds isolated Safe Replay simulations to the PostgreSQL pipeline, four evidence-based incident types, and read-only lineage. It includes an identity-only downstream reporting stage, deterministic synthetic fault scenarios, and read-only incident inspection. It contains no AI, automatic application of corrections, public deployment, or production pipeline scheduling.
+Phase 6 adds persistent replay audits and an optional evidence-grounded LLM investigation adapter to the PostgreSQL pipeline, four incident types, lineage, and isolated Safe Replay. It includes an identity-only downstream reporting stage, deterministic synthetic fault scenarios, and read-only incident inspection. LLM requests are opt-in and disabled by default. No corrections are automatically applied, and there is no public deployment or production pipeline scheduling.
 
 ## Existing local services
 
@@ -483,3 +483,99 @@ No migration, server report table, new dependency, dashboard change, public depl
 - `evaluate_state()` — `backend/app/replay/state.py`: reuse pipeline reconciliation and incident detectors.
 - `replay_run()` / `verify_replay()` — `backend/app/replay/service.py`: deterministic audit report and verification.
 - `backend/tests/test_replay.py`: replay isolation, correctness, failure handling, auditability, and original-data preservation.
+
+
+## Phase 6: persistent replay audits and evidence-grounded investigation
+
+### Durable replay audit records
+
+Migration `0004_replay_audit` adds `replay_audits` and a supporting `(run_id, id)` unique constraint on incidents for a composite foreign key. It does not change source row contents. Both project databases have been upgraded to this revision with pre-existing rows preserved.
+
+The existing replay POST now saves a minimized audit record **after** simulation. Source reads remain in their original read-only snapshot; audit persistence opens a separate write session/transaction on the configured engine and inserts only into `replay_audits`. An audit write failure cannot apply the simulated correction. The response includes `audit.id`, `audit.created_at`, and `audit.audit_sha256` only after persistence succeeds.
+
+`GET /pipeline-runs/{run_id}/replays/{audit_id}` retrieves the durable, integrity-checked audit representation. Unknown or cross-run audit IDs return 404; invalid ID syntax returns 422. Corrupt or inconsistent audit content is rejected with a safe integrity error. No update/delete API exists.
+
+Stored fields include replay ID, audit ID, source run/incident references, supported operation, input fingerprint, algorithm version, source simulation digest, audit-content digest, UTC creation timestamp, outcome, and structured before/after/verification evidence. The durable projection deliberately omits raw CSV, customer IDs, business-ID values, original free-form incident text, and exception messages. It retains internal source IDs, identity hashes, counts, validation statuses/reasons, protected-input verification, proposal scope, and source-evidence hashes. The full transient simulation response remains available from POST; GET returns its minimized audit representation rather than duplicating raw data.
+
+Logical replay ID identifies input snapshot + operation + algorithm version. Audit ID identifies the logical replay and the particular result digest. Repeated identical requests reuse the same audit ID and timestamp, including concurrent requests. Distinct failure/result outcomes can remain as separate immutable evidence, but a partial unique index permits only one verified/no-change result per logical replay. A conflicting successful result is rejected instead of overwriting history. Composite foreign keys prevent an audit from referencing an incident in another run; a database check forbids applied_to_source=true.
+
+Durable audit creation is an intentional metadata write, not a source correction. Direct `replay_run()` still performs simulation only; the HTTP replay workflow calls `persist_audit()` separately. Audit records are not included in the replay source fingerprint, so writing an audit cannot change the next replay's logical input. Downgrade is refused when durable audit records would be lost. Hashes detect integrity changes; they are not digital signatures or protection against an administrator rewriting data and hashes together.
+
+### Investigation endpoint and stable response
+
+`POST /incidents/{incident_id}/investigate` returns:
+
+- `summary` with supporting evidence IDs.
+- `confirmed_observations` with database/lineage references and fixed server-rendered statements.
+- `hypotheses` explicitly marked unconfirmed.
+- `root_cause` with unknown status and null value unless the evidence model is extended in a later phase; this implementation never promotes a hypothesis to known cause.
+- `unknowns` and sanitized `evidence_gaps`.
+- `suggested_diagnostic_actions`, always marked not_executed.
+- `relevant_replays` from integrity-checked audits for that exact run and incident, labelled as simulations rather than source fixes.
+- `generation` identifying deterministic fallback versus validated LLM-assisted selection.
+- `evidence_catalog` and a packet fingerprint for tracing every selected fact.
+
+No body, or `{"use_llm": false}`, uses the deterministic local fallback. `{"use_llm": true}` permits a configured provider call; it does not bypass reference/claim validation. Extra fields, code, tools, SQL, or proposed fixes are not accepted by the request model. The endpoint is read-only; investigation output is not persisted and no suggested action is executed.
+
+### Optional official provider adapter
+
+The official `openai` Python SDK is pinned in requirements and lock files. Its Responses API structured-output adapter uses `responses.parse`, a strict Pydantic selection schema, the pinned official API endpoint, store=false, no tools, no automatic retries, and a bounded timeout (default 15 seconds, allowed 1–30). API failures, timeouts, refusals, SDK import/resource failures, and invalid outputs produce a clearly labelled deterministic fallback. Raw provider exceptions and rejected model content are never returned.
+
+To opt in, fill only the ignored project-root `.env` file using the placeholder keys in `.env.example`:
+
+```dotenv
+AI_PROVIDER=openai
+OPENAI_MODEL=YOUR_ACCOUNT_SUPPORTED_STRUCTURED_OUTPUT_MODEL
+OPENAI_API_KEY=YOUR_PRIVATE_API_KEY
+AI_TIMEOUT_SECONDS=15
+```
+
+Never put a real key in `.env.example` or chat. Choose a Responses/structured-output-capable model available to your account; no paid model is silently selected. Environment values take precedence over `.env`. Restart the backend after configuration changes. OPENAI_BASE_URL is not used; the adapter pins https://api.openai.com/v1. Credentials are never included in evidence packets.
+
+Live provider inference was **not tested** during implementation. Automated requests are mocked and tests disable AI by default. In this execution environment, direct import of the SDK's response resources encountered a Windows Application Control block on the native jiter dependency. The app and public SDK client import successfully, and the provider adapter handles the blocked resource as provider_sdk_unavailable. Windows security settings were not changed. Resolve runtime/package approval compatibility separately before relying on real provider calls; deterministic fallback remains usable.
+
+Official reference: [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
+
+### Grounding and privacy contract
+
+The evidence catalog is built from the existing incident-lineage service, committed validation outcomes, recorded snapshot facts, and relevant checked audit records. Stored text is untrusted. Provider packets contain only generated fact IDs and typed numbers/statuses—not raw CSV, customer/business IDs, log contents, arbitrary schema values, or instruction-like strings from incident data. Context is bounded to 25 records and 20 relevant audits; truncated context is explicitly unknown.
+
+The LLM's role is to select/prioritize existing facts and allowlisted hypothesis/action codes. It is not permitted to invent free-form confirmed prose. The server checks all fact references, complete critical observations and mandatory unknowns, allowed hypothesis/action predicates, and their specific supporting evidence. Unknown references, unsupported assertions, mismatched support, omitted unknowns, extra command fields, and attempts to label a hypothesis confirmed are rejected. The response falls back to deterministic output and does not echo the rejected model text.
+
+All displayed statements are rendered from server templates. This constrained design provides enforceable claim grounding; it is deliberately more limited than a free-form AI analyst. `generation.mode=llm_assisted_validated` transparently means LLM selection/prioritization with server-rendered text. `generation.mode=deterministic_fallback` has llm_generated=false and a safe reason. A valid reference alone is not treated as permission for arbitrary prose.
+
+A missing expected identity supports the observation that no matching current reporting row exists. It does not prove deletion, failed delivery, filtering, or any other cause. Those remain unconfirmed possibilities. Clean output supports a committed validation outcome, not an invented validation execution timestamp. A replay that proposes 2 -> 3 reporting identities remains hypothetical when the actual source still has 2.
+
+### Concrete verified DEMO-002 investigation
+
+A fresh, explicitly synthetic development run was added for the integrated demonstration:
+
+- Run: `94aefef6-2c1d-49ec-a9c2-129b55489f6c`.
+- Missing incident: `6c4cf732-da43-437c-80df-090e61fcd573`.
+- DEMO-002: raw record 29, source row 2, accepted clean record 16.
+- The manifest expects raw record 29 downstream; its matching reporting observation is absent. Last confirmed stage: Clean Orders.
+- Durable replay audit: `c385007541a6adeee9895ef79addc6419d2b1b7c93643668adf28c04d6b1920f`.
+- Replay verification proposed reporting count 2 -> 3. Actual source reporting count remained 2, and every pre-existing row was unchanged.
+- Investigation used the deterministic fallback, with no real LLM call. It cited the incident, raw row, clean/validation outcome, manifest, lineage comparison, and audit record. Root cause remained unknown.
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8002/incidents/6c4cf732-da43-437c-80df-090e61fcd573/investigate
+Invoke-RestMethod http://127.0.0.1:8002/pipeline-runs/94aefef6-2c1d-49ec-a9c2-129b55489f6c/replays/c385007541a6adeee9895ef79addc6419d2b1b7c93643668adf28c04d6b1920f
+```
+
+These are actual local development IDs, not seeded IDs for new installations. Restart an already-running backend to load routes. Ports remain 8002/5174; the React dashboard was not redesigned.
+
+### Phase 6 verification and review map
+
+Tests use mocked provider responses only and retain the proofline_test-only connection guard. Persistence tests cover cross-session retrieval, concurrent deduplication, failed/verified result history, successful-result conflicts, foreign-key/run isolation, no-apply checks, tamper detection, privacy minimization, and downgrade/upgrade safety. Investigation tests cover all four incident types, invented references, unsupported claims, malicious source text, incomplete evidence, provider errors/timeouts/refusals/SDK failures, privacy, and related audit results. Old tests now recognize the new schema head and permit only the intentional audit-table write in the replay HTTP workflow; source preservation checks remain intact.
+
+Modules to review:
+
+- `backend/app/replay/audit.py`: minimized durable projection, separate write transaction, content checks, idempotent retrieval.
+- `backend/app/investigation/catalog.py`: evidence catalog, allowed hypotheses/actions, and privacy-minimized context.
+- `backend/app/investigation/schemas.py`: strict structured provider-selection contract.
+- `backend/app/investigation/provider.py`: optional official SDK adapter and safe failure handling.
+- `backend/app/investigation/service.py`: grounding validation, fallback, and structured response rendering.
+- `backend/tests/test_replay_audit.py` and `backend/tests/test_investigation.py`: regression and integration coverage.
+
+Remaining limits: no free-form AI assertions, no independently retained investigation history, no signed audit trail, no automatic correction/recovery, and no live-provider success claim. Context truncation and absent historical evidence remain explicit unknowns. Phase 6 is left uncommitted; no push is performed.

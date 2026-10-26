@@ -319,7 +319,7 @@ def test_no_migration_or_persistent_replay_rows(db_engine):
         before_version = MigrationContext.configure(connection).get_current_revision()
     execute(db_engine, run_id, incidents['MISSING_RECORDS'], 'recover_missing_reporting')
     with db_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0003_schema_lateness'
+        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0004_replay_audit'
     assert snapshot(db_engine) == original
 
 
@@ -368,7 +368,9 @@ def test_api_simulates_and_rejects_apply_code_paths_and_extra_fields(db_engine):
             assert client.get(path).status_code == 405
     finally:
         app.dependency_overrides.pop(get_session, None)
-    assert snapshot(db_engine) == original
+    after = snapshot(db_engine)
+    assert {key: value for key, value in after.items() if key != 'replay_audits'} == {key: value for key, value in original.items() if key != 'replay_audits'}
+    assert len(after['replay_audits']) == 1
 
 
 def test_already_recovered_missing_snapshot_is_stale_not_reapplied(db_engine):

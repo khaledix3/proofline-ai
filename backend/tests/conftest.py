@@ -95,3 +95,9 @@ def protect_postgresql_test_connections():
         yield
     finally:
         event.remove(Engine, "do_connect", guard)
+
+
+@pytest.fixture(autouse=True)
+def disable_live_ai_by_default(monkeypatch):
+    # No automated test may accidentally spend money or disclose data via local secrets.
+    monkeypatch.setenv("AI_PROVIDER", "disabled")

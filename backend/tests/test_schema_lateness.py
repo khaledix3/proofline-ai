@@ -325,6 +325,8 @@ def test_migration_upgrade_preserves_legacy_data_and_downgrade_refuses_evidence(
         session.rollback()
         new_id = run_fault_scenario(session, 'late_arrival')
     with db_engine.begin() as connection:
+        command.downgrade(migration_config(connection), '0003_schema_lateness')
+    with db_engine.begin() as connection:
         with pytest.raises(RuntimeError, match='evidence would be lost'):
             command.downgrade(migration_config(connection), '0002_incidents')
         assert MigrationContext.configure(connection).get_current_revision() == '0003_schema_lateness'

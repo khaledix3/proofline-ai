@@ -2,6 +2,9 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
+from app.investigation.service import investigate
+from app.replay.errors import ReplayRejected
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -51,6 +54,24 @@ def inspect_incident(incident_id: UUID, session: Session = Depends(get_session))
 def inspect_incident_lineage(incident_id: UUID, session: Session = Depends(get_session)):
     try:
         result = incident_lineage(session, str(incident_id))
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
+    if result is None:
+        raise HTTPException(404, detail="Incident not found")
+    return result
+
+
+class InvestigationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    use_llm: bool = False
+
+
+@router.post("/{incident_id}/investigate")
+def investigate_incident(incident_id: UUID, request: InvestigationRequest | None = None, session: Session = Depends(get_session)):
+    try:
+        result = investigate(session, str(incident_id), use_llm=request.use_llm if request else False)
+    except ReplayRejected as error:
+        raise HTTPException(error.status_code, detail={"code": error.code, "message": error.message}) from None
     except SQLAlchemyError:
         raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
     if result is None:

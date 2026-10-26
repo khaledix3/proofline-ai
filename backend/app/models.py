@@ -3,7 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import (JSON, CheckConstraint, Date, DateTime, ForeignKey,
-                        ForeignKeyConstraint, Integer, Numeric, String, Text,
+                        ForeignKeyConstraint, Integer, Numeric, String, Text, Index, text,
                         UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -128,6 +128,7 @@ class Incident(Base):
     __tablename__ = "incidents"
     __table_args__ = (
         UniqueConstraint("run_id", "incident_type", name="one_incident_type_per_run"),
+        UniqueConstraint("run_id", "id", name="incident_run_id"),
         CheckConstraint("incident_type IN ('DUPLICATE_RECORDS', 'MISSING_RECORDS', 'SCHEMA_DRIFT', 'LATE_ARRIVING_DATA')", name="known_incident_type"),
         CheckConstraint("affected_count > 0", name="positive_affected_count"),
         CheckConstraint("(incident_type = 'DUPLICATE_RECORDS' AND stage = 'raw_to_clean') OR (incident_type = 'MISSING_RECORDS' AND stage = 'clean_to_reporting') OR (incident_type = 'SCHEMA_DRIFT' AND stage = 'source_to_raw') OR (incident_type = 'LATE_ARRIVING_DATA' AND stage = 'source_to_ingestion')", name="incident_stage_matches_type"),
@@ -170,3 +171,30 @@ class RecordArrival(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_contracts.run_id"), index=True)
     event_timestamp: Mapped[datetime | None] = mapped_column(UTCDateTime())
     arrival_timestamp: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class ReplayAudit(Base):
+    __tablename__ = "replay_audits"
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id", "incident_id"], ["incidents.run_id", "incidents.id"]),
+        UniqueConstraint("replay_id", "simulation_sha256", name="unique_replay_result"),
+        Index("one_verified_result_per_replay", "replay_id", unique=True,
+              postgresql_where=text("outcome IN ('verified', 'no_change_required')"),
+              sqlite_where=text("outcome IN ('verified', 'no_change_required')")),
+        CheckConstraint("operation IN ('recover_missing_reporting', 'deduplicate_processing')", name="audit_known_operation"),
+        CheckConstraint("outcome IN ('verified', 'no_change_required', 'verification_failed', 'failed')", name="audit_known_outcome"),
+        CheckConstraint("applied_to_source = false", name="audit_never_applied"),
+    )
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    replay_id: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    incident_id: Mapped[str] = mapped_column(String(36), index=True)
+    operation: Mapped[str] = mapped_column(String(40))
+    input_fingerprint: Mapped[str] = mapped_column(String(64))
+    algorithm_version: Mapped[str] = mapped_column(String(32))
+    outcome: Mapped[str] = mapped_column(String(32))
+    simulation_sha256: Mapped[str] = mapped_column(String(64))
+    audit_sha256: Mapped[str] = mapped_column(String(64))
+    applied_to_source: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    report: Mapped[dict] = mapped_column(JSON)
