@@ -2,7 +2,7 @@
 
 AI Data Incident Investigation & Recovery Platform.
 
-Phase 3B extends the PostgreSQL CSV pipeline with evidence-based duplicate, missing-record, schema-drift, and late-arrival incidents. It includes an identity-only downstream reporting stage, deterministic synthetic fault scenarios, and read-only incident inspection. It contains no AI, recovery, replay, or production pipeline scheduling.
+Phase 5 adds isolated Safe Replay simulations to the PostgreSQL pipeline, four evidence-based incident types, and read-only lineage. It includes an identity-only downstream reporting stage, deterministic synthetic fault scenarios, and read-only incident inspection. It contains no AI, automatic application of corrections, public deployment, or production pipeline scheduling.
 
 ## Existing local services
 
@@ -381,4 +381,105 @@ These IDs are observations from this local development database, not seeded IDs 
 - `build_graph()` in `backend/app/lineage/graph.py`: stable nodes/edges with explicit evidence kinds and placeholder semantics.
 - `backend/tests/test_lineage.py`: functional, safety, integrity, historical, and read-only regression coverage.
 
-Remaining limits: this is a current-state evidence read model, not an event-sourced audit history; historical attempted stages and unrecorded event times remain unknown. Large-run pagination and visualization are not implemented. No LLM, root-cause generator, Safe Replay, automated recovery, dashboard redesign, or infrastructure is added.
+Remaining limits: this is a current-state evidence read model, not an event-sourced audit history; historical attempted stages and unrecorded event times remain unknown. Large-run pagination and visualization are not implemented. Phase 4 adds no LLM, root-cause generator, automated recovery, dashboard redesign, or infrastructure. Phase 5 below adds isolated replay simulation only.
+
+
+## Phase 5: Safe Replay simulations
+
+Safe Replay is a deterministic preview over an existing, completed run. It never updates the source run, raw rows, clean/rejected outcomes, reporting data, contract, timestamps, or stored incidents. There is no apply endpoint or automatic recovery path.
+
+### Endpoint and allowed operations
+
+`POST /pipeline-runs/{run_id}/replays` accepts exactly:
+
+```json
+{
+  "operation": "recover_missing_reporting",
+  "incident_id": "UUID-of-the-source-MISSING_RECORDS-incident"
+}
+```
+
+The operation can also be `deduplicate_processing` with a DUPLICATE_RECORDS incident from that same run. UUIDs must be valid. Extra fields (including apply, code, SQL, database URLs, and output paths) and unsupported operation names are rejected with HTTP 422. The service also rejects unsupported direct Python operations explicitly. No arbitrary code, file path, schema selection, or SQL is accepted.
+
+The endpoint returns HTTP 200 for a completed simulation report, whose status is one of:
+
+- `verified`: proposed temporary output changes passed verification.
+- `no_change_required`: output was already correct, and the replay verified that fact.
+- `verification_failed`: temporary output did not satisfy the safety/correctness checks. No source correction was applied.
+- `failed`: temporary setup/transformation/evaluation/cleanup failed. The report contains a safe stage/code, with no raw exception text or partial successful result.
+
+Precondition failures return a safe structured `detail.code` and message, normally HTTP 409; missing runs or incidents outside the selected run return 404. Source database/configuration errors retain the existing safe 503 behavior. Reports never claim that a source incident was resolved.
+
+### Isolation and reproducibility
+
+1. A fresh source session reads one consistent snapshot through the existing lineage repository. PostgreSQL uses REPEATABLE READ, READ ONLY. Active caller transactions or pending writes are refused.
+2. Copy the original run-scoped rows to detached Python data and compute their SHA-256 fingerprint. Original CSV text must exactly agree with preserved raw rows and the recorded header.
+3. Create a private in-memory SQLite database using only the application's static models. The API cannot choose its URL or location. No source session/connection is passed to transformations.
+4. Copy source rows with their original run/raw IDs and relationships. A second raw-only private database independently reuses `persist_order_outcomes()` to verify that recorded validation outcomes match the original input.
+5. Perform one of the two allowlisted transformations in temporary data, then reuse existing count reconciliation and all four evidence detectors to evaluate before/after state.
+6. Verify protected-input fingerprints, raw identities, validation results, expected identities, uniqueness, counts, other incident evidence, and operation-specific scope. Close all temporary sessions and dispose their engines, including failure paths.
+7. Return the comparison report. Nothing is copied back. Cleanup failures are reported rather than asserted to have succeeded.
+
+Stored schema version/definition, extra-column policy, ingestion/event timestamps, and lateness threshold are reused; environment changes and current wall-clock time cannot reinterpret replay input. The report contains no newly generated UUID or execution timestamp that would make identical inputs produce different report content. Internal temporary output surrogate IDs are not business identities and are excluded from comparisons.
+
+### Scenario semantics
+
+`recover_missing_reporting` requires a current MISSING_RECORDS snapshot with absent expected identities and no unexpected/duplicate downstream output. It proposes adding exactly those accepted manifest identities to temporary reporting output. It does not reclassify invalid/rejected records, change validation, remove existing reporting rows, or repair unrelated identity substitutions.
+
+`deduplicate_processing` independently repeats the existing first-valid-occurrence rule against preserved raw input, rebuilds only temporary derived outputs, and corrects duplicated downstream business-ID projections to their validated manifest identities. It preserves which source raw IDs were absent downstream, so it does not silently repair unrelated physical omissions. Unrelated wrong identities are rejected. Source validation outcomes must already match deterministic processing; replay does not guess how to repair inconsistent upstream evidence.
+
+A correctly processed run with duplicate raw records normally returns `no_change_required`: raw duplicate rows and their explicit rejections remain. Even when an incorrect duplicated reporting projection is corrected temporarily, DUPLICATE_RECORDS remains detected because it describes the preserved raw input. The report separately compares duplicate output excess, source duplicate counts, and each simulated incident's presence/affected count.
+
+SCHEMA_DRIFT and LATE_ARRIVING_DATA are not supported target repair operations. Schema-drift input is refused; unrelated lateness evidence is preserved unchanged when replaying eligible missing/duplicate scenarios. Historical runs without saved contracts, timing, or reporting evidence are refused rather than assigned invented defaults. Stale incident snapshots must not be silently treated as current evidence.
+
+### Auditable report
+
+The JSON contains:
+
+- `replay_id`: a deterministic content-derived ID for operation + algorithm version + source snapshot + run/incident references.
+- `input_references`: original IDs, source snapshot fingerprint, UTF-8 CSV SHA-256, contract fingerprint, schema version, and lineage integrity summary.
+- `stored_source_incidents`: original, unchanged detection-time snapshots.
+- `proposed_correction`: bounded simulated changes, winning/duplicate policy, and preserved unrelated omissions.
+- `before` / `after`: raw/clean/reporting identities, processing/reporting/duplicate counts, complete validation outcomes, and fresh simulated incident evidence/status.
+- `comparison`: added/removed reporting identities, count deltas, validation changes, and simulated incident presence/affected-count changes.
+- `verification`: individual checks and their actual aggregate result.
+- `isolation`: no-apply policy, private memory storage, and actual temporary-engine creation/disposal counts.
+- `report_sha256`: SHA-256 of canonical JSON excluding this digest field. Canonical JSON sorts keys, uses compact separators, UTF-8 characters, and ISO/decimal text for dates/decimals.
+
+The report is returned as JSON, not stored in source database tables. Save it if you need a durable audit artifact. Hashes support integrity/repeatability; they are not signatures or an independently retained audit log. Comparisons refer to the captured snapshot and do not assert that another process could not change source data concurrently later.
+
+Example (creates a new synthetic source run only when you explicitly invoke the first command):
+
+```powershell
+$run = Invoke-RestMethod -Method Post http://127.0.0.1:8002/pipeline-runs/scenarios/both
+$incidents = Invoke-RestMethod "http://127.0.0.1:8002/incidents?run_id=$($run.id)"
+$missing = $incidents.items | Where-Object incident_type -eq MISSING_RECORDS
+$body = @{ operation = 'recover_missing_reporting'; incident_id = $missing.id } | ConvertTo-Json
+$report = Invoke-RestMethod -Method Post -ContentType application/json -Body $body "http://127.0.0.1:8002/pipeline-runs/$($run.id)/replays"
+$report.status
+$report.comparison
+```
+
+### Verified demonstrations and tests
+
+Demonstrations used two synthetic source runs in a uniquely owned temporary `proofline_test` schema. Replay then operated in private in-memory databases. No development source run was changed or corrected, and the demonstration schema was removed after verification.
+
+| Demonstration | Before | Simulated after | Original source after replay |
+| --- | --- | --- | --- |
+| Missing downstream record | 5 raw, 3 accepted, 2 rejected; 2 reporting identities; DEMO-002 absent | Same raw/validation; 3 reporting identities; missing count 1 -> 0 | Still 2 reporting identities; original incident preserved |
+| Duplicated reporting projection | 5 raw, 3 accepted, 2 rejected; 2 output rows with one excess duplicate business ID | Same raw/validation and output row count; duplicate output excess 1 -> 0; unrelated missing DEMO-002 retained | Original incorrect projection and incident snapshots unchanged |
+
+Both demonstrations were executed twice and produced byte-equivalent canonical reports. Raw duplicate count remained 1, and the raw duplicate incident remained detectable in both before/after states.
+
+Tests cover source/schema/incident consistency, run isolation, PostgreSQL read-only source transactions, no source DML, private database creation/disposal, successful and failing transformations, failed verification, failed cleanup, deterministic repetition/digests, unsupported code/apply/path requests, unchanged original tables, and unchanged Alembic revision. PostgreSQL tests remain restricted to isolated `proofline_test` schemas; SQLite fixture cases also run. Development/public test-table fingerprints are compared outside pytest.
+
+No migration, server report table, new dependency, dashboard change, public deployment, or apply mechanism is added. Alembic remains at `0003_schema_lateness`. Local replay limits are 10,000 records and 5 MB of source CSV. The simulation backend is SQLite and does not certify a future PostgreSQL correction/commit. Phase 5 code is intentionally left uncommitted until separately approved.
+
+### Functions to review
+
+- `capture_input()` — `backend/app/replay/inputs.py`: read-only lineage-backed snapshot and safe input checks.
+- `isolated_database()` — `backend/app/replay/sandbox.py`: private storage and guaranteed disposal attempts.
+- `validate_replay()` / `transform()` — `backend/app/replay/operations.py`: allowlisted preconditions and temporary corrections.
+- `evaluate_state()` — `backend/app/replay/state.py`: reuse pipeline reconciliation and incident detectors.
+- `replay_run()` / `verify_replay()` — `backend/app/replay/service.py`: deterministic audit report and verification.
+- `backend/tests/test_replay.py`: replay isolation, correctness, failure handling, auditability, and original-data preservation.

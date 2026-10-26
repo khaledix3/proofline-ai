@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.pipeline.routes import router as pipeline_router
 from app.incidents.routes import router as incident_router
+from app.replay.routes import router as replay_router
 
 app = FastAPI(title="ProofLine AI")
 app.add_middleware(
@@ -21,3 +22,5 @@ def health() -> dict[str, str]:
 app.include_router(pipeline_router)
 
 app.include_router(incident_router)
+
+app.include_router(replay_router)

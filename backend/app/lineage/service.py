@@ -24,7 +24,7 @@ class RunFacts:
     incidents: list
 
 
-def _start_read_snapshot(session: Session) -> None:
+def start_read_snapshot(session: Session) -> None:
     # Fresh HTTP sessions get one consistent, server-enforced read-only PG snapshot.
     # Caller-owned transactions are respected; no commits or writes occur here.
     if session.new or session.dirty or session.deleted:
@@ -36,7 +36,7 @@ def _start_read_snapshot(session: Session) -> None:
         connection.exec_driver_sql("SET TRANSACTION READ ONLY")
 
 
-def _load_facts(session: Session, run_id: str) -> RunFacts | None:
+def load_run_facts(session: Session, run_id: str) -> RunFacts | None:
     run = session.get(PipelineRun, run_id)
     if run is None:
         return None
@@ -223,17 +223,17 @@ def _assemble(facts: RunFacts, incident: Incident | None = None) -> dict:
 
 
 def run_lineage(session: Session, run_id: str) -> dict | None:
-    _start_read_snapshot(session)
+    start_read_snapshot(session)
     with session.no_autoflush:
-        facts = _load_facts(session, run_id)
+        facts = load_run_facts(session, run_id)
         return _assemble(facts) if facts else None
 
 
 def incident_lineage(session: Session, incident_id: str) -> dict | None:
-    _start_read_snapshot(session)
+    start_read_snapshot(session)
     with session.no_autoflush:
         incident = session.get(Incident, incident_id)
         if incident is None:
             return None
-        facts = _load_facts(session, incident.run_id)
+        facts = load_run_facts(session, incident.run_id)
         return _assemble(facts, incident) if facts else None
