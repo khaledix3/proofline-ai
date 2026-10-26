@@ -1,0 +1,8 @@
+main { max-width: 850px; margin: 0 auto; padding: 100px 28px; }
+.eyebrow { color: #7dd3fc; font-size: .75rem; letter-spacing: .18em; font-weight: 700; }
+h1 { font-size: clamp(2.6rem, 8vw, 4.5rem); letter-spacing: -.05em; margin: 16px 0; }
+.description { color: #bbc8dc; font-size: 1.2rem; line-height: 1.6; }
+section { margin-top: 40px; border: 1px solid #2c3a50; border-radius: 16px; padding: 24px; background: #121e30; }
+h2 { margin: 0; font-size: 1rem; }
+[role=status] { color: #b9d9ee; line-height: 1.6; }
+.note { color: #95a6bf; margin-top: 28px; line-height: 1.7; }

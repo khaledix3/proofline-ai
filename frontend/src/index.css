@@ -1,0 +1,3 @@
+:root { font-family: system-ui, sans-serif; color: #e9eef8; background: #0c1423; font-synthesis: none; text-rendering: optimizeLegibility; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+* { box-sizing: border-box; }
