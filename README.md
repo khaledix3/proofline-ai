@@ -303,3 +303,82 @@ The full suite retains the proofline_test-only connection guard, unique-schema P
 - `persist_raw_orders()` saves the contract and arrival evidence; `detect_incidents()` persists snapshots using the existing API structure.
 
 Limitations: CSV logical types only; v2 must be selected explicitly; one ingestion timestamp per local batch; no streaming watermarks, clock-skew incident, or inference of times for legacy data. No LLM, recovery, replay, new infrastructure, or dashboard redesign is included.
+
+
+## Phase 4: read-only record lineage and evidence tracing
+
+Phase 4 adds two inspection endpoints without changing the pipeline, schema, or historical rows:
+
+- `GET /pipeline-runs/{run_id}/lineage`
+- `GET /incidents/{incident_id}/lineage`
+
+Both use the existing session dependency, UUID validation, 404 behavior, and safe 503 database errors. They are GET-only and are forwarded by Vite under `/api`. The backend and frontend remain on ports 8002 and 5174. Restart the backend after loading the new code if it is running without reload.
+
+### Storage and observations
+
+No migration or new lineage table is needed. Existing run IDs and source foreign keys already connect raw, clean, rejected, manifest, reporting, arrival, contract, and incident records. Alembic remains at `0003_schema_lateness`. The read model joins these rows by run ID and raw record ID; it never re-runs validation, detection, ingestion, or reporting. It never backfills a stage event or changes stored evidence.
+
+The logical path is Raw Orders -> Validation outcome -> Clean Orders -> Reporting. There is no separately persisted validation event or per-record clean/reporting write timestamp in the current model. Lineage therefore identifies validation **outcomes** from committed clean/rejected rows and returns execution timestamps as null. A reporting-stage published_at value is batch metadata, not a per-record arrival time. Existing event/arrival metadata and its system/injected clock label are returned only when recorded.
+
+A failed transaction may have attempted a stage before rolling back. Without committed outcome evidence, lineage reports that stage as unknown; it does not assert the stage never ran.
+
+### Response structure for a future visualization
+
+Responses use `format_version: "1"` and contain:
+
+| Field | Meaning |
+| --- | --- |
+| scope | Run or incident inspection, always with the authoritative run ID. |
+| run | Stored status, counts, start/end timestamps, and safe error code. |
+| stage_definitions | The four logical stages, not an execution event list. |
+| records | Per-source validation outcome, clean identity, reporting expectation/observation, duplicate relation, timing, last confirmed stage, incident references, and evidence gaps. |
+| nodes / edges | Stable IDs scoped by run, explicit node kinds/statuses and relationship evidence kinds. Unknown/absent stage placeholders are explicitly labelled and do not imply execution. |
+| incidents | Original detection-time evidence snapshots, unchanged. |
+| schema_contract / reporting_stage | Existing contract snapshot and published batch metadata, or null when not recorded. |
+| summary | Full-run stored/observed count reconciliation, returned/total record counts, current missing-identity count within the returned records, completeness and integrity status. |
+| evidence_gaps / integrity_issues | Missing metadata, unresolved snapshot references, conflicting outcomes, missing manifest entries, and count inconsistencies. |
+| interpretations | Explicitly labelled identity-comparison inferences. Root cause remains null. |
+| semantics | Limits on the observation, timestamp, validation, placeholder, and root-cause claims. |
+
+Each evidence reference names its table and source key. Incident links include JSON paths into the stored evidence. An incident response returns the affected source records plus directly referenced duplicate source context, rather than every record in the run. Header-level schema drift is run-scoped; a header-only file can return an incident and run-context node with zero record nodes.
+
+### Confirmed facts versus interpretation
+
+- A raw, clean, rejection, manifest, arrival, or reporting row is a current durable observation.
+- A validation result is backed by the persisted output/rejection, not a fabricated validation event or freshly re-evaluated rule.
+- A rejected record is intentionally excluded with its recorded reason; it is not a missing downstream identity.
+- A duplicate pair shows the rejection's actual duplicate_of_raw_id and the target's actual acceptance state. A missing target outcome is labelled unavailable rather than accepted.
+- A manifest records an expected `(run_id, raw_order_id, order_id)` identity. It is an expectation, not proof that downstream received it.
+- With a published manifest but no matching reporting row, lineage reports the last confirmed stage and absent observation. It cannot distinguish non-delivery, deletion, or another cause without further recorded evidence.
+- If the source reached reporting with the wrong business ID, the current reporting observation is retained; the expected identity is separately marked absent.
+- Old runs without a reporting marker/manifest are unknown downstream, not automatically missing. A clean row without a saved expectation does not cause lineage to invent that expectation.
+- Incident evidence remains a detection-time snapshot. Current records can differ later, so `missing_at_detection` can coexist with a current observed reporting row. The reader neither rewrites nor resolves the incident.
+- Cross-run or malformed snapshot references are reported as unresolved; the reader never fetches another run's records to satisfy them.
+
+### Read-only consistency and test isolation
+
+Fresh PostgreSQL API sessions use a REPEATABLE READ, READ ONLY transaction for a consistent inspection snapshot. The reader does not commit. Caller-owned transactions are respected; direct Python callers should supply a dedicated clean read session. Pending ORM writes are refused, and autoflush is disabled during inspection. SQLite uses the same pure read model without PostgreSQL transaction commands.
+
+The existing test guard permits PostgreSQL connections only to `proofline_test`. Tests create unique temporary schemas and remove only those schemas. All lineage mutation scenarios (incorrect downstream identities, missing metadata, conflicting outcomes) occur only in fixture-owned synthetic data. No recovery operation is exposed. Full application-table fingerprints in development and the public test schema were unchanged before/after the full suite and operational lineage inspection.
+
+Tests cover normal, rejected, duplicate, missing, schema-drift, and late records; incomplete/historical/failed runs; snapshot/current differences; cross-run references; deterministic graph IDs; API errors and GET-only behavior; pooled transaction reset; read-only data preservation; and unchanged migration/model metadata. No new migration is performed, and model parity remains checked against `0003_schema_lateness`.
+
+### Verified development example
+
+The existing synthetic run `4414eeb2-d86b-4da3-8cbb-d8da5999212e` has missing-record incident `677f1b54-ac14-426e-a652-e9e718f69e4c`. Its DEMO-002 record is raw ID 18, source row 2. Clean row 8 confirms its accepted validation outcome. The saved manifest expects `(raw_order_id=18, order_id=DEMO-002)`, but the published reporting stage has no matching downstream observation. The last confirmed stage is Clean Orders; no root cause or validation execution timestamp is claimed.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8002/pipeline-runs/4414eeb2-d86b-4da3-8cbb-d8da5999212e/lineage
+Invoke-RestMethod http://127.0.0.1:8002/incidents/677f1b54-ac14-426e-a652-e9e718f69e4c/lineage
+```
+
+These IDs are observations from this local development database, not seeded IDs guaranteed in a new installation.
+
+### Functions to review
+
+- `run_lineage()` / `incident_lineage()` / `_record_lineage()` in `backend/app/lineage/service.py`: load scoped observations and explain their availability without replay.
+- `incident_references()` in `backend/app/lineage/evidence.py`: map stored snapshot references safely to source records within the run.
+- `build_graph()` in `backend/app/lineage/graph.py`: stable nodes/edges with explicit evidence kinds and placeholder semantics.
+- `backend/tests/test_lineage.py`: functional, safety, integrity, historical, and read-only regression coverage.
+
+Remaining limits: this is a current-state evidence read model, not an event-sourced audit history; historical attempted stages and unrecorded event times remain unknown. Large-run pagination and visualization are not implemented. No LLM, root-cause generator, Safe Replay, automated recovery, dashboard redesign, or infrastructure is added.

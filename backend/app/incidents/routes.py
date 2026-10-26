@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_session
 from app.models import Incident
+from app.lineage.service import incident_lineage
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -44,3 +45,14 @@ def inspect_incident(incident_id: UUID, session: Session = Depends(get_session))
     if incident is None:
         raise HTTPException(404, detail="Incident not found")
     return incident_result(incident)
+
+
+@router.get("/{incident_id}/lineage")
+def inspect_incident_lineage(incident_id: UUID, session: Session = Depends(get_session)):
+    try:
+        result = incident_lineage(session, str(incident_id))
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
+    if result is None:
+        raise HTTPException(404, detail="Incident not found")
+    return result
