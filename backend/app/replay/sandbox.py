@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.models import Base
 
-INPUT_TABLES = {"pipeline_runs", "raw_orders", "pipeline_contracts", "record_arrivals"}
+INPUT_TABLES = {"pipeline_runs", "raw_orders", "pipeline_contracts", "record_arrivals", "dataset_imports", "dataset_source_records"}
 
 
 @contextmanager

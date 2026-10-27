@@ -131,7 +131,7 @@ class Incident(Base):
         UniqueConstraint("run_id", "id", name="incident_run_id"),
         CheckConstraint("incident_type IN ('DUPLICATE_RECORDS', 'MISSING_RECORDS', 'SCHEMA_DRIFT', 'LATE_ARRIVING_DATA')", name="known_incident_type"),
         CheckConstraint("affected_count > 0", name="positive_affected_count"),
-        CheckConstraint("(incident_type = 'DUPLICATE_RECORDS' AND stage = 'raw_to_clean') OR (incident_type = 'MISSING_RECORDS' AND stage = 'clean_to_reporting') OR (incident_type = 'SCHEMA_DRIFT' AND stage = 'source_to_raw') OR (incident_type = 'LATE_ARRIVING_DATA' AND stage = 'source_to_ingestion')", name="incident_stage_matches_type"),
+        CheckConstraint("(incident_type = 'DUPLICATE_RECORDS' AND stage IN ('raw_to_clean', 'reporting')) OR (incident_type = 'MISSING_RECORDS' AND stage = 'clean_to_reporting') OR (incident_type = 'SCHEMA_DRIFT' AND stage = 'source_to_raw') OR (incident_type = 'LATE_ARRIVING_DATA' AND stage = 'source_to_ingestion')", name="incident_stage_matches_type"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
@@ -198,3 +198,33 @@ class ReplayAudit(Base):
     applied_to_source: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     report: Mapped[dict] = mapped_column(JSON)
+
+
+class DatasetImport(Base):
+    """One repeatable dataset experiment, separate from existing local demonstrations."""
+    __tablename__ = "dataset_imports"
+    __table_args__ = (
+        CheckConstraint("source_kind IN ('uci_real', 'uci_controlled')", name="dataset_source_kind"),
+        UniqueConstraint("import_key", name="dataset_import_once"),
+    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_runs.id"), primary_key=True)
+    import_key: Mapped[str] = mapped_column(String(64))
+    workbook_sha256: Mapped[str] = mapped_column(String(64))
+    subset_sha256: Mapped[str] = mapped_column(String(64))
+    source_kind: Mapped[str] = mapped_column(String(24))
+    provenance: Mapped[dict] = mapped_column(JSON)
+    evaluation: Mapped[dict] = mapped_column(JSON)
+
+
+class DatasetSourceRecord(Base):
+    """Original workbook values; mapped pipeline fields never replace these values."""
+    __tablename__ = "dataset_source_records"
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id", "raw_order_id"], ["raw_orders.run_id", "raw_orders.id"]),
+        UniqueConstraint("run_id", "source_row", name="dataset_row_once_per_run"),
+    )
+    raw_order_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("dataset_imports.run_id"))
+    source_row: Mapped[int] = mapped_column(Integer)
+    source_identity: Mapped[str] = mapped_column(String(100))
+    original_values: Mapped[dict] = mapped_column(JSON)

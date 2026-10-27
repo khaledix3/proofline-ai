@@ -24,7 +24,23 @@ def validate_replay(source, operation: str, before: dict, *, lifecycle=None) -> 
     if before["incident_status"]["SCHEMA_DRIFT"]["detected_in_simulation"]:
         raise ReplayRejected("UNSUPPORTED_SCHEMA_DRIFT", "Replay cannot reinterpret schema-drift inputs.")
     current = before["incident_status"][incident["incident_type"]]["evidence"]
-    if current is None or fingerprint(current) != fingerprint(incident["evidence"]):
+    comparable = deepcopy(current)
+    # Legacy duplicate snapshots described raw duplicates only. Preserve that meaning;
+    # downstream safety still comes from the independently checked manifest below.
+    if operation == "deduplicate_processing" and "output_groups" not in incident["evidence"] and comparable is not None:
+        for key in ("output_groups", "output_stage", "output_rule"):
+            comparable.pop(key, None)
+        comparable["counts"].pop("duplicate_output_excess_count", None)
+        comparable["affected_order_ids"] = sorted(group["order_id"] for group in comparable["groups"])
+        comparable["stage"] = "raw_to_clean"
+    if (operation == "deduplicate_processing" and comparable is not None
+            and incident["evidence"].get("output_stage") == "reporting"
+            and incident["evidence"].get("stage") == "raw_to_clean"
+            and comparable.get("output_stage") == "reporting"):
+        # Early output snapshots used the legacy category stage plus explicit output_stage.
+        # Preserve their stored JSON; normalize only this metadata field for comparison.
+        comparable["stage"] = "raw_to_clean"
+    if comparable is None or fingerprint(comparable) != fingerprint(incident["evidence"]):
         raise ReplayRejected("STALE_INCIDENT_EVIDENCE", "Stored incident evidence does not match the current source observation.")
     # Independently reuse the real processor against raw-only temporary data.
     with isolated_database(source, inputs_only=True, lifecycle=lifecycle) as validation_session:

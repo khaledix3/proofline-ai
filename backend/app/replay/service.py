@@ -9,7 +9,7 @@ from app.replay.operations import SUPPORTED, transform, validate_replay
 from app.replay.sandbox import isolated_database
 from app.replay.state import evaluate_state, protected_fingerprint
 
-ALGORITHM_VERSION = "safe-replay.v1"
+ALGORITHM_VERSION = "safe-replay.v2"
 
 
 def _identity_set(rows):
@@ -40,7 +40,10 @@ def verify_replay(before, after, protected_before, protected_after, operation) -
               "raw_counts_reconcile": after["counts"]["source_count"] == after["counts"]["accepted_count"] + after["counts"]["rejected_count"],
               "outputs_are_unique": after["counts"]["duplicate_output_excess_count"] == 0,
               "other_incident_evidence_preserved": all(before["incident_status"][key] == after["incident_status"][key]
-                                                       for key in ("DUPLICATE_RECORDS", "SCHEMA_DRIFT", "LATE_ARRIVING_DATA"))}
+                                                       for key in (("DUPLICATE_RECORDS", "SCHEMA_DRIFT", "LATE_ARRIVING_DATA") if operation == "recover_missing_reporting" else ("SCHEMA_DRIFT", "LATE_ARRIVING_DATA")))}
+    if operation == "deduplicate_processing":
+        duplicate_groups = lambda state: (state["incident_status"]["DUPLICATE_RECORDS"]["evidence"] or {}).get("groups", [])
+        checks["raw_duplicate_evidence_preserved"] = duplicate_groups(before) == duplicate_groups(after)
     if operation == "recover_missing_reporting":
         checks["missing_identities_recovered_in_simulation"] = not after["incident_status"]["MISSING_RECORDS"]["detected_in_simulation"]
         checks["no_existing_reporting_identity_removed"] = _identity_set(before["reported_identities"]) <= _identity_set(after["reported_identities"])

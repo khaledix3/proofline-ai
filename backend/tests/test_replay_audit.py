@@ -141,7 +141,7 @@ def test_migration_guard_prevents_audit_loss(db_engine):
     with db_engine.begin() as connection:
         with pytest.raises(RuntimeError, match='audit records would be lost'):
             command.downgrade(migration_config(connection), '0003_schema_lateness')
-        assert MigrationContext.configure(connection).get_current_revision() == '0004_replay_audit'
+        assert MigrationContext.configure(connection).get_current_revision() == '0006_reporting_collision_stage'
     with Session(db_engine) as reader:
         assert reader.get(ReplayAudit, saved['id']) is not None
 
@@ -195,7 +195,7 @@ def test_upgrade_preserves_original_pipeline_rows(db_engine):
     def original_rows():
         with db_engine.connect() as connection:
             return {table.name: sorted(canonical_json(dict(row)) for row in connection.execute(select(table)).mappings())
-                    for table in Base.metadata.sorted_tables if table.name != 'replay_audits'}
+                    for table in Base.metadata.sorted_tables if table.name not in ('replay_audits', 'dataset_imports', 'dataset_source_records')}
     before = original_rows()
     with db_engine.begin() as connection:
         command.upgrade(migration_config(connection), 'head')

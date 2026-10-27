@@ -41,6 +41,9 @@ def incident_references(incident: Incident, run_raw_ids: set[int]) -> IncidentRe
             for number, duplicate in enumerate(items(group, "duplicates")):
                 if isinstance(duplicate, dict):
                     add(duplicate.get("raw_order_id"), f"/groups/{index}/duplicates/{number}", "duplicate_at_detection")
+        for index, group in enumerate(items(evidence, "output_groups")):
+            for raw_id in items(group, "raw_order_ids"):
+                add(raw_id, f"/output_groups/{index}", "duplicate_reporting_identity_at_detection")
     elif incident.incident_type == "MISSING_RECORDS":
         for key, role in (("missing_records", "missing_at_detection"), ("unexpected_records", "unexpected_at_detection")):
             for index, row in enumerate(items(evidence, key)):

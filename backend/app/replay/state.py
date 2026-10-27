@@ -7,7 +7,7 @@ from app.incidents.detection import duplicate_evidence, missing_evidence
 from app.incidents.schema_drift import schema_drift_evidence
 from app.incidents.lateness import late_arrival_evidence
 from app.models import (CleanOrder, Incident, PipelineContract, PipelineRun, RawOrder,
-                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder)
+                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder, DatasetImport, DatasetSourceRecord)
 from app.pipeline.service import reconcile_counts
 from app.replay.inputs import canonical_json, fingerprint
 
@@ -15,7 +15,7 @@ DETECTORS = (("DUPLICATE_RECORDS", duplicate_evidence, "duplicate_record_count")
              ("MISSING_RECORDS", missing_evidence, "missing_count"),
              ("SCHEMA_DRIFT", schema_drift_evidence, "difference_count"),
              ("LATE_ARRIVING_DATA", late_arrival_evidence, "late_record_count"))
-PROTECTED_MODELS = (PipelineRun, RawOrder, PipelineContract, RecordArrival, Incident)
+PROTECTED_MODELS = (PipelineRun, RawOrder, PipelineContract, RecordArrival, Incident, DatasetImport, DatasetSourceRecord)
 
 
 def identities(session: Session, model, run_id: str) -> list[dict]:
@@ -54,7 +54,7 @@ def evaluate_state(session: Session, run_id: str) -> dict:
     for incident_type, detector, count_key in DETECTORS:
         evidence = detector(session, run_id)
         incident_status[incident_type] = {"detected_in_simulation": evidence is not None,
-            "affected_count": evidence["counts"][count_key] if evidence else 0, "evidence": evidence}
+            "affected_count": (evidence["counts"][count_key] + (evidence["counts"].get("duplicate_output_excess_count", 0) if incident_type == "DUPLICATE_RECORDS" else 0)) if evidence else 0, "evidence": evidence}
     return {"counts": {**counts, "expected_reporting_count": len(expected), "reported_count": len(reported),
                        "duplicate_output_excess_count": sum(max(0, count - 1) for count in business_counts.values())},
             "raw_order_ids": list(session.scalars(select(RawOrder.id).where(RawOrder.run_id == run_id).order_by(RawOrder.row_number))),

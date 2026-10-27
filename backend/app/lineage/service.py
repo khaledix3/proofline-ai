@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.lineage.evidence import incident_references
 from app.lineage.graph import build_graph, evidence_ref
 from app.models import (CleanOrder, Incident, PipelineContract, PipelineRun, RawOrder,
-                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder, ReportingStage)
+                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder, ReportingStage, DatasetSourceRecord)
 
 
 @dataclass
@@ -22,6 +22,8 @@ class RunFacts:
     reporting_stage: ReportingStage | None
     contract: PipelineContract | None
     incidents: list
+    source: dict
+    source_records: dict
 
 
 def start_read_snapshot(session: Session) -> None:
@@ -37,6 +39,7 @@ def start_read_snapshot(session: Session) -> None:
 
 
 def load_run_facts(session: Session, run_id: str) -> RunFacts | None:
+    from app.datasets.service import get_source_summary
     run = session.get(PipelineRun, run_id)
     if run is None:
         return None
@@ -51,7 +54,7 @@ def load_run_facts(session: Session, run_id: str) -> RunFacts | None:
                     {row.raw_order_id: row for row in rows(ReportedOrder)},
                     {row.raw_order_id: row for row in rows(RecordArrival)},
                     session.get(ReportingStage, run_id), session.get(PipelineContract, run_id),
-                    sorted(rows(Incident), key=lambda row: (row.incident_type, row.id)))
+                    sorted(rows(Incident), key=lambda row: (row.incident_type, row.id)), get_source_summary(session, run_id), {row.raw_order_id: row for row in rows(DatasetSourceRecord)})
 
 
 def _identity(row) -> dict | None:
@@ -73,6 +76,9 @@ def _record_lineage(facts: RunFacts, raw_id: int, links: list[dict]) -> dict:
     reported = facts.reported.get(raw_id)
     arrival = facts.arrivals.get(raw_id)
     gaps, issues = [], []
+    original_source = facts.source_records.get(raw_id)
+    if facts.source.get("kind") in ("uci_real", "uci_controlled") and original_source is None:
+        gaps.append("DATASET_SOURCE_REFERENCE_NOT_RECORDED")
     clean_refs = [evidence_ref("clean_orders", id=clean.id, run_id=run_id)] if clean else []
     reject_refs = [evidence_ref("rejected_orders", id=rejected.id, run_id=run_id)] if rejected else []
     if clean and rejected:
@@ -136,6 +142,11 @@ def _record_lineage(facts: RunFacts, raw_id: int, links: list[dict]) -> dict:
     return {
         "raw_order_id": raw_id, "row_number": raw.row_number,
         "source_order_id": raw.original_data.get("order_id"),
+        "source_reference": {"source_row": original_source.source_row,
+            "source_identity": original_source.source_identity,
+            "sheet": facts.source.get("provenance", {}).get("sheet"),
+            "workbook_sha256": facts.source.get("workbook_sha256"),
+            "evidence_ref": evidence_ref("dataset_source_records", raw_order_id=raw_id, run_id=run_id)} if original_source else None,
         "raw": _observation("observed", "persisted_record", [evidence_ref("raw_orders", id=raw_id, run_id=run_id)]),
         "validation": _observation(outcome, "persisted_outcome" if outcome != "unknown" else "stage_placeholder",
                                    clean_refs + reject_refs, rejection_reason=rejected.reason_code if rejected else None,
@@ -199,7 +210,7 @@ def _assemble(facts: RunFacts, incident: Incident | None = None) -> dict:
     return {
         "format_version": "1", "scope": {"kind": "incident" if incident else "run", "run_id": run_id,
                                           "incident_id": incident.id if incident else None},
-        "run": {"id": run_id, "status": facts.run.status, "source_name": facts.run.source_name,
+        "run": {"source": facts.source, "id": run_id, "status": facts.run.status, "source_name": facts.run.source_name,
                 "started_at": facts.run.started_at, "finished_at": facts.run.finished_at, "error_code": facts.run.error_code, "counts": stored},
         "stage_definitions": [{"id": key, "label": label} for key, label in (
             ("raw", "Raw Orders"), ("validation", "Validation outcome"), ("clean", "Clean Orders"), ("reporting", "Reporting"))],

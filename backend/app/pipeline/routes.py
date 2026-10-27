@@ -1,6 +1,9 @@
 from uuid import UUID
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select, func
+from app.models import PipelineRun, DatasetImport
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -10,6 +13,29 @@ from app.pipeline.scenarios import Scenario, run_fault_scenario
 from app.pipeline.service import PipelineProcessingError, get_run_result, run_local_sample
 
 router = APIRouter(prefix="/pipeline-runs", tags=["local pipeline"])
+
+
+@router.get("")
+def list_pipeline_runs(source_kind: Literal["local_demo", "uci_real", "uci_controlled"] | None = None, status: Literal["running", "completed", "failed"] | None = None,
+                       limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+                       session: Session = Depends(get_session)):
+    from app.datasets.service import get_source_summary
+    query = select(PipelineRun)
+    count = select(func.count()).select_from(PipelineRun)
+    if source_kind is not None:
+        predicate = ~PipelineRun.id.in_(select(DatasetImport.run_id)) if source_kind == "local_demo" else PipelineRun.id.in_(select(DatasetImport.run_id).where(DatasetImport.source_kind == source_kind))
+        query, count = query.where(predicate), count.where(predicate)
+    if status is not None:
+        query = query.where(PipelineRun.status == status)
+        count = count.where(PipelineRun.status == status)
+    try:
+        rows = session.scalars(query.order_by(PipelineRun.started_at.desc(), PipelineRun.id).limit(limit).offset(offset)).all()
+        return {"items": [{"source": get_source_summary(session, row.id), "id": row.id, "status": row.status, "source_name": row.source_name,
+                           "started_at": row.started_at, "finished_at": row.finished_at, "error_code": row.error_code,
+                           "counts": {key: getattr(row, key) for key in ("source_count", "accepted_count", "rejected_count", "duplicate_count")}}
+                          for row in rows], "total": session.scalar(count), "limit": limit, "offset": offset}
+    except SQLAlchemyError:
+        raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
 
 
 @router.post("/test", status_code=201)

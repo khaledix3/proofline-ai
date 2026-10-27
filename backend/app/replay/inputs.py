@@ -6,16 +6,17 @@ import hashlib
 import json
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.lineage.service import load_run_facts, run_lineage, start_read_snapshot
 from app.models import (CleanOrder, Incident, PipelineContract, PipelineRun, RawOrder,
-                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder, ReportingStage)
+                        RecordArrival, RejectedOrder, ReportedOrder, ReportingExpectedOrder, ReportingStage, DatasetImport, DatasetSourceRecord)
 from app.pipeline.contracts import get_contract
 from app.pipeline.ingestion import parse_orders_csv
 from app.replay.errors import ReplayRejected
 
 MODELS = (PipelineRun, RawOrder, PipelineContract, RecordArrival, CleanOrder, RejectedOrder,
-          ReportingStage, ReportingExpectedOrder, ReportedOrder, Incident)
+          ReportingStage, ReportingExpectedOrder, ReportedOrder, Incident, DatasetImport, DatasetSourceRecord)
 MAX_RECORDS = 10000
 MAX_SOURCE_BYTES = 5000000
 
@@ -85,7 +86,9 @@ def capture_input(session: Session, run_id: str, incident_id: str) -> ReplayInpu
                 PipelineContract: [facts.contract], RecordArrival: list(facts.arrivals.values()),
                 CleanOrder: list(facts.clean.values()), RejectedOrder: list(facts.rejected.values()),
                 ReportingStage: [facts.reporting_stage], ReportingExpectedOrder: list(facts.expected.values()),
-                ReportedOrder: list(facts.reported.values()), Incident: facts.incidents}
+                ReportedOrder: list(facts.reported.values()), Incident: facts.incidents,
+                DatasetImport: list(session.scalars(select(DatasetImport).where(DatasetImport.run_id == run_id))),
+                DatasetSourceRecord: list(session.scalars(select(DatasetSourceRecord).where(DatasetSourceRecord.run_id == run_id)))}
         tables = {}
         for model in MODELS:
             values = [deepcopy({column.name: getattr(row, column.name) for column in model.__table__.columns})

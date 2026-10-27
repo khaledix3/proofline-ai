@@ -71,7 +71,7 @@ def investigate(session: Session, incident_id: str, *, use_llm: bool = False) ->
         return {"code": choice.code, "statement": templates[choice.code], "evidence_ids": choice.evidence_ids,
                 "evidence_refs": [reference for key in choice.evidence_ids for reference in catalog.facts[key]["evidence_refs"]]}
     return {"format_version": "1", "incident_id": incident_id, "run_id": catalog.run_id,
-            "incident_type": catalog.incident_type, "generation": generation,
+            "incident_type": catalog.incident_type, "source_context": catalog.source_context, "generation": generation,
             "summary": {"statement": " ".join(catalog.facts[key]["statement"] for key in selection.summary_fact_ids),
                         "evidence_ids": selection.summary_fact_ids},
             "confirmed_observations": observations,

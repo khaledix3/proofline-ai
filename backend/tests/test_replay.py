@@ -319,7 +319,7 @@ def test_no_migration_or_persistent_replay_rows(db_engine):
         before_version = MigrationContext.configure(connection).get_current_revision()
     execute(db_engine, run_id, incidents['MISSING_RECORDS'], 'recover_missing_reporting')
     with db_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0004_replay_audit'
+        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0006_reporting_collision_stage'
     assert snapshot(db_engine) == original
 
 
@@ -365,7 +365,8 @@ def test_api_simulates_and_rejects_apply_code_paths_and_extra_fields(db_engine):
             assert client.post('/pipeline-runs/' + str(uuid4()) + '/replays', json=body).status_code == 404
             assert client.post('/pipeline-runs/bad/replays', json=body).status_code == 422
             assert client.post(path, json={**body, 'incident_id': 'bad'}).status_code == 422
-            assert client.get(path).status_code == 405
+            assert client.get(path).status_code == 200
+            assert len(client.get(path).json()['items']) == 1
     finally:
         app.dependency_overrides.pop(get_session, None)
     after = snapshot(db_engine)

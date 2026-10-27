@@ -41,6 +41,7 @@ class EvidenceCatalog:
     unknowns: list = field(default_factory=lambda: ["ROOT_CAUSE_UNKNOWN", "VALIDATION_TIME_NOT_RECORDED"])
     records: list = field(default_factory=list)
     replays: list = field(default_factory=list)
+    source_context: dict = field(default_factory=dict)
 
     def add(self, key, text, references, payload):
         self.facts[key] = {"id": key, "statement": text, "evidence_refs": references, "payload": payload}
@@ -51,7 +52,7 @@ class EvidenceCatalog:
 
     def packet(self):
         # No raw CSV, business/customer IDs, source strings, logs, or model instructions from data.
-        return {"incident_type": self.incident_type,
+        return {"incident_type": self.incident_type, "source_context": self.source_context,
                 "facts": [{"id": key, **value["payload"]} for key, value in self.facts.items()],
                 "allowed_hypotheses": self.hypotheses, "allowed_actions": self.actions,
                 "mandatory_unknown_codes": self.unknowns}
@@ -71,6 +72,23 @@ def build_catalog(trace: dict, audits: list[dict]) -> EvidenceCatalog:
     if incident_type not in TYPES:
         raise ValueError("Unsupported incident type")
     catalog = EvidenceCatalog(trace["run"]["id"], incident["id"], incident_type)
+    source = trace["run"].get("source", {})
+    kind = source.get("kind") if source.get("kind") in ("local_demo", "uci_real", "uci_controlled") else "local_demo"
+    provenance = source.get("provenance", {})
+    experiment = provenance.get("experiment")
+    if experiment not in ("real", "missing_reporting", "duplicate_processing", "schema_drift", "late_arrival"):
+        experiment = None
+    simulated_clock = any((row.get("timing") or {}).get("time_source") == "injected_clock" for row in trace["records"])
+    catalog.source_context = {"source_kind": kind, "controlled": kind == "uci_controlled",
+                              "experiment": experiment, "clock_semantics": "simulated" if simulated_clock else "captured_without_historical_delivery_claim"}
+    if kind in ("uci_real", "uci_controlled"):
+        context_ref = _reference("dataset_imports", {"run_id": catalog.run_id})
+        statement = ("This run is a controlled UCI experiment; injected incidents are not findings about historical source failures."
+                     if kind == "uci_controlled" else "This run evaluates preserved UCI worksheet lines; invoice-number repetition alone is not duplicate evidence.")
+        catalog.add("CTX", statement, [context_ref], {"kind": "dataset_context", "source_kind": kind, "controlled": kind == "uci_controlled"})
+        if simulated_clock:
+            catalog.add("CLOCK", "Event and arrival clocks for this run were explicitly simulated; they do not measure historical delivery.",
+                        [context_ref], {"kind": "simulated_clock_context"})
     incident_ref = _reference("incidents", {"id": incident["id"], "run_id": catalog.run_id})
     catalog.add("I", f"Stored incident {incident_type} affects {incident['affected_count']} evidence items.",
                 [incident_ref], {"kind": "incident_snapshot", "affected_count": incident["affected_count"]})
@@ -91,8 +109,13 @@ def build_catalog(trace: dict, audits: list[dict]) -> EvidenceCatalog:
                                and not re.match(r"(?:sk-|AKIA)", label)) else None
         catalog.records.append({"raw_order_id": raw_id, "display_order_id": safe_label,
                                 "last_confirmed_stage": row["last_confirmed_stage"]})
-        catalog.add(f"R{raw_id}", f"Source row {row['row_number']} is stored as raw record {raw_id}.",
-                    row["raw"]["evidence_refs"], {"kind": "raw_observation", "raw_order_id": raw_id, "row_number": row["row_number"]})
+        source_reference = row.get("source_reference")
+        raw_statement = (f"Mapped pipeline row {row['row_number']} is stored as raw record {raw_id}; original worksheet row is {source_reference['source_row']}."
+                         if source_reference else f"Source row {row['row_number']} is stored as raw record {raw_id}.")
+        raw_references = row["raw"]["evidence_refs"] + ([source_reference["evidence_ref"]] if source_reference else [])
+        catalog.add(f"R{raw_id}", raw_statement, raw_references,
+                    {"kind": "raw_observation", "raw_order_id": raw_id, "row_number": row["row_number"],
+                     "worksheet_row": source_reference["source_row"] if source_reference else None})
         if row["validation"]["status"] in ("accepted", "rejected"):
             outcome = row["validation"]["status"]
             catalog.add(f"V{raw_id}", f"Record {raw_id} has a committed {outcome} validation outcome; no separate execution time is recorded.",
@@ -117,6 +140,11 @@ def build_catalog(trace: dict, audits: list[dict]) -> EvidenceCatalog:
         catalog.add("D", f"The stored snapshot identifies {number} excess valid raw duplicate records; input preservation does not imply duplicated clean output.",
                     [{**incident_ref, "path": "/evidence/counts/duplicate_record_count"}], {"kind": "raw_duplicates", "duplicate_record_count": number})
         catalog.allow("REPEATED_SOURCE_SUBMISSION", "INSPECT_SOURCE_SUBMISSIONS", ["D"])
+    if incident_type == "DUPLICATE_RECORDS" and _safe_count(counts.get("duplicate_output_excess_count")):
+        number = counts["duplicate_output_excess_count"]
+        catalog.add("OD", f"The stored snapshot records {number} excess reporting identity collisions; invoice-number repetition alone is not duplicate evidence.",
+                    [{**incident_ref, "path": "/evidence/output_groups"}], {"kind": "reporting_duplicates", "duplicate_output_excess_count": number})
+        catalog.allow("DOWNSTREAM_PROCESSING_GAP", "INSPECT_REPORTING_PATH", ["OD"])
     if incident_type == "SCHEMA_DRIFT" and _safe_count(counts.get("difference_count")):
         number = counts["difference_count"]
         catalog.add("S", f"The stored schema snapshot records {number} exact differences against its expected versioned contract.",

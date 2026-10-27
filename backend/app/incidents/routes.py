@@ -10,7 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_session
-from app.models import Incident
+from app.models import Incident, DatasetImport
 from app.lineage.service import incident_lineage
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
@@ -23,18 +23,23 @@ def incident_result(incident: Incident) -> dict:
 
 
 @router.get("")
-def list_incidents(run_id: UUID | None = None,
+def list_incidents(source_kind: Literal["local_demo", "uci_real", "uci_controlled"] | None = None, run_id: UUID | None = None,
                    incident_type: Literal["DUPLICATE_RECORDS", "MISSING_RECORDS", "SCHEMA_DRIFT", "LATE_ARRIVING_DATA"] | None = None,
                    limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
+                   sort: Literal["oldest", "newest"] = "oldest",
                    session: Session = Depends(get_session)):
     query = select(Incident)
+    if source_kind is not None:
+        predicate = ~Incident.run_id.in_(select(DatasetImport.run_id)) if source_kind == "local_demo" else Incident.run_id.in_(select(DatasetImport.run_id).where(DatasetImport.source_kind == source_kind))
+        query = query.where(predicate)
     if run_id is not None:
         query = query.where(Incident.run_id == str(run_id))
     if incident_type is not None:
         query = query.where(Incident.incident_type == incident_type)
     try:
-        rows = session.scalars(query.order_by(Incident.detected_at, Incident.id).limit(limit).offset(offset)).all()
-        return {"items": [incident_result(row) for row in rows], "limit": limit, "offset": offset}
+        ordering = Incident.detected_at.desc() if sort == "newest" else Incident.detected_at.asc()
+        rows = session.scalars(query.order_by(ordering, Incident.id).limit(limit).offset(offset)).all()
+        return {"items": [{**incident_result(row), "source_kind": (session.get(DatasetImport, row.run_id).source_kind if session.get(DatasetImport, row.run_id) else "local_demo")} for row in rows], "limit": limit, "offset": offset}
     except SQLAlchemyError:
         raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
 
@@ -47,7 +52,8 @@ def inspect_incident(incident_id: UUID, session: Session = Depends(get_session))
         raise HTTPException(503, detail="Database unavailable or migrations missing; see README.") from None
     if incident is None:
         raise HTTPException(404, detail="Incident not found")
-    return incident_result(incident)
+    dataset = session.get(DatasetImport, incident.run_id)
+    return {**incident_result(incident), "source_kind": dataset.source_kind if dataset else "local_demo"}
 
 
 @router.get("/{incident_id}/lineage")

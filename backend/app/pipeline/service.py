@@ -151,8 +151,9 @@ def get_run_result(session: Session, run_id: str) -> dict | None:
     raw = session.scalars(select(RawOrder).where(RawOrder.run_id == run_id).order_by(RawOrder.row_number)).all()
     clean = session.scalars(select(CleanOrder).where(CleanOrder.run_id == run_id).order_by(CleanOrder.raw_order_id)).all()
     rejected = session.scalars(select(RejectedOrder).where(RejectedOrder.run_id == run_id).order_by(RejectedOrder.raw_order_id)).all()
+    from app.datasets.service import get_source_summary
     return {
-        "id": run.id, "status": run.status, "source_name": run.source_name,
+        "source": get_source_summary(session, run_id), "id": run.id, "status": run.status, "source_name": run.source_name,
         "started_at": run.started_at, "finished_at": run.finished_at, "error_code": run.error_code,
         "counts": {key: getattr(run, key) for key in ("source_count", "accepted_count", "rejected_count", "duplicate_count")},
         "raw_orders": [{"id": r.id, "row_number": r.row_number, "data": r.original_data,

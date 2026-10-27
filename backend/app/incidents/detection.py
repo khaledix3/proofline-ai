@@ -45,10 +45,17 @@ def duplicate_evidence(session: Session, run_id: str) -> dict | None:
         order, _ = validate(next(source.original_data for source in raw if source.id == row.raw_order_id))
         if row.duplicate_of_raw_id != first[order.order_id]:
             raise ValueError("Duplicate rejection does not reference the first accepted source")
-    if not expected_duplicates:
+    output_rows = session.scalars(select(ReportedOrder).where(ReportedOrder.run_id == run_id)).all()
+    output_by_id = defaultdict(list)
+    for output in output_rows:
+        output_by_id[output.order_id].append(output.raw_order_id)
+    output_groups = [{"order_id": key, "raw_order_ids": sorted(ids), "occurrence_count": len(ids)}
+                     for key, ids in sorted(output_by_id.items()) if len(ids) > 1]
+    output_excess = sum(row["occurrence_count"] - 1 for row in output_groups)
+    if not expected_duplicates and not output_excess:
         return None
     row_numbers = {row.id: row.row_number for row in raw}
-    return {
+    evidence = {
         "rule_version": "1", "run_id": run_id, "stage": "raw_to_clean",
         "rule": "Validate first; strip IDs, compare case-sensitively within a run; first valid occurrence wins.",
         "counts": {"raw_count": len(raw), "valid_record_count": len(raw) - invalid_count,
@@ -60,6 +67,16 @@ def duplicate_evidence(session: Session, run_id: str) -> dict | None:
                     "occurrence_count": 1 + len(groups[order_id]), "duplicates": groups[order_id]}
                    for order_id in sorted(groups)],
     }
+    if output_excess:
+        evidence["counts"]["duplicate_output_excess_count"] = output_excess
+        evidence["output_stage"] = "reporting"
+        if not expected_duplicates:
+            evidence["stage"] = "reporting"
+        evidence["output_groups"] = output_groups
+        evidence["affected_order_ids"] = sorted(set(evidence["affected_order_ids"]) | {row["order_id"] for row in output_groups})
+        evidence["output_rule"] = "Distinct source-line reporting rows must not collide on the validated per-run identity. Repeated invoice numbers alone are not duplicates."
+    return evidence
+
 
 
 def missing_evidence(session: Session, run_id: str) -> dict | None:
@@ -111,7 +128,7 @@ def detect_incidents(session: Session, run_id: str) -> list[Incident]:
         evidence = detector(session, run_id)
         if evidence is not None:
             incident = Incident(run_id=run_id, incident_type=incident_type, stage=evidence["stage"],
-                                affected_count=evidence["counts"][count_key], evidence=evidence)
+                                affected_count=evidence["counts"][count_key] + (evidence["counts"].get("duplicate_output_excess_count", 0) if incident_type == "DUPLICATE_RECORDS" else 0), evidence=evidence)
             session.add(incident)
             existing[incident_type] = incident
     session.flush()
