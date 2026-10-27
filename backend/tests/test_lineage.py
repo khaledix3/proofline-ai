@@ -376,7 +376,7 @@ def test_lineage_reads_preserve_data_schema_and_incidents(db_engine):
             assert incident_lineage(session, incident['id'])['incidents'][0]['evidence'] == incident['evidence']
     assert snapshot(db_engine) == before
     with db_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == version == '0006_reporting_collision_stage'
+        assert MigrationContext.configure(connection).get_current_revision() == version == '0007_reliability_lab'
         assert sorted(inspect(connection).get_table_names()) == tables
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
 

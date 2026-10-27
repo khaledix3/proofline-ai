@@ -319,7 +319,7 @@ def test_no_migration_or_persistent_replay_rows(db_engine):
         before_version = MigrationContext.configure(connection).get_current_revision()
     execute(db_engine, run_id, incidents['MISSING_RECORDS'], 'recover_missing_reporting')
     with db_engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0006_reporting_collision_stage'
+        assert MigrationContext.configure(connection).get_current_revision() == before_version == '0007_reliability_lab'
     assert snapshot(db_engine) == original
 
 

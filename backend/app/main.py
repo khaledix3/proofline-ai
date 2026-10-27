@@ -24,3 +24,9 @@ app.include_router(pipeline_router)
 app.include_router(incident_router)
 
 app.include_router(replay_router)
+
+from app.analytics.routes import router as analytics_router
+app.include_router(analytics_router)
+
+from app.lab.routes import router as lab_router
+app.include_router(lab_router)

@@ -228,3 +228,21 @@ class DatasetSourceRecord(Base):
     source_row: Mapped[int] = mapped_column(Integer)
     source_identity: Mapped[str] = mapped_column(String(100))
     original_values: Mapped[dict] = mapped_column(JSON)
+
+
+class LabEvaluation(Base):
+    """Only audit results persist; all fault-injected pipeline rows remain in memory."""
+    __tablename__ = "lab_evaluations"
+    __table_args__ = (UniqueConstraint("evaluation_key", name="lab_evaluation_once"),
+        CheckConstraint("status IN ('completed', 'failed')", name="lab_known_status"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    evaluation_key: Mapped[str] = mapped_column(String(64))
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    source_fingerprint: Mapped[str] = mapped_column(String(64))
+    algorithm_version: Mapped[str] = mapped_column(String(32))
+    config: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    report: Mapped[dict] = mapped_column(JSON)
+    report_sha256: Mapped[str] = mapped_column(String(64))
