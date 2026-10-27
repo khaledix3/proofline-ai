@@ -2,11 +2,71 @@
 
 AI Data Incident Investigation & Recovery Platform.
 
-Phase 6 adds persistent replay audits and an optional evidence-grounded LLM investigation adapter to the PostgreSQL pipeline, four incident types, lineage, and isolated Safe Replay. It includes an identity-only downstream reporting stage, deterministic synthetic fault scenarios, and read-only incident inspection. LLM requests are opt-in and disabled by default. No corrections are automatically applied, and there is no public deployment or production pipeline scheduling.
+Evidence-driven data reliability portfolio project featuring incident detection, data lineage, Safe Replay, business impact analysis, and controlled reliability evaluation.
+
+Implemented through Phase 8: a FastAPI/PostgreSQL backend and a React/TypeScript investigation dashboard, with Arabic RTL as the default and optional English. Investigation uses a clearly labeled **deterministic fallback by default**. An optional evidence-constrained OpenAI adapter exists, but **no real LLM inference call has been verified**; provider responses in automated tests are mocked. No correction is automatically applied.
+
+## Architecture and supported behavior
+
+```mermaid
+flowchart LR
+    CSV[CSV / pinned UCI adapter] --> Raw[(Preserved raw orders)]
+    Raw --> Validate[Versioned validation]
+    Validate --> Clean[(Clean orders)]
+    Validate --> Reject[(Rejected orders + reasons)]
+    Clean --> Manifest[(Expected reporting identities)]
+    Manifest --> Reporting[(Reporting observations)]
+    Raw --> Evidence[Incident evidence and lineage]
+    Reporting --> Evidence
+    Evidence --> Investigation[Deterministic investigation / optional provider]
+    Evidence --> Replay[Private replay simulation]
+    Replay --> Audit[(Replay audit reports)]
+    Clean --> Lab[Isolated fault-evaluation copies]
+    Lab --> LabAudit[(Reliability evaluation reports)]
+```
+
+- Four incident types: duplicate records, missing downstream identities, schema drift, and late-arriving data.
+- Run/incident inspection, confirmed versus missing/unknown lineage, evidence references, and saved replay retrieval.
+- Data Health KPIs and observed run history; unmonitored or incomplete evidence is reported as unknown.
+- Business Impact verifies UCI source-line quantity, price, mapping and currency before computing an associated value. It never equates that value with confirmed revenue loss.
+- Reliability Lab injects reproducible faults only into private in-memory copies, measures predictions against injected ground truth, and persists an audit report. Precision/recall/F1 from these fixtures do not establish production accuracy.
+- Safe Replay supports missing-reporting recovery and duplicate-processing simulation only. It preserves original input, outcomes and incidents; there is no apply/recovery endpoint.
+
+## Source observations versus controlled incidents
+
+The documented 1,000-line UCI evaluation retained 743 accepted and 257 intentionally rejected records under this project's contract. Missing customer references, cancellations/return candidates and missing descriptions are source observations, not proof of a failed pipeline or fraud. Repeated invoice numbers can be legitimate invoice lines and are not duplicate-order evidence.
+
+Missing reporting records, output collisions, schema drift and late arrival in the controlled demonstrations were deliberately injected into separate copies. Their results are not historical incidents discovered in the UCI source. Historical delivery times and the source timezone are unavailable; real historical lateness is unknown.
+
+**Dataset attribution:** Chen, D. (2015), [Online Retail, UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/352/online+retail), DOI [10.24432/C5BW33](https://doi.org/10.24432/C5BW33), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Downloaded workbook/ZIP files, original customer identifiers, environment files and local exports are not distributed in this repository. Only synthetic CSV/test fixtures are included. See [source mapping, licensing and evaluation details](docs/uci-retail.md).
+
+## Fresh local checkout
+
+Verified environment: Windows PowerShell, Python 3.13.16, Node.js 24.21.0 and local PostgreSQL 18. Other runtime/platform combinations have not been clean-install verified. Use `npm.cmd`; changing PowerShell execution policy is unnecessary.
+
+From the cloned repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements-lock.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+if (-not (Test-Path .env.test)) { Copy-Item .env.example .env.test }
+```
+
+Provision dedicated PostgreSQL databases `proofline_dev` and `proofline_test` if absent. Configure `DATABASE_URL` in `.env` for development and `TEST_DATABASE_URL` in `.env.test` for tests, using local credentials and the placeholders in `.env.example`. The test role needs permission to create/drop its own schemas inside `proofline_test`. Never paste credentials into chat or commit these files. Existing local environment files must be preserved.
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+The current head is `0007_reliability_lab`; migrations do not seed source data. A fresh database starts empty. Use the explicitly synthetic sample/scenario endpoints below or the attributed UCI import steps in [the dataset guide](docs/uci-retail.md). The [Phase 8 guide](docs/phase8-data-health.md) defines health, impact and evaluation metrics and limits.
+
+Keep the backend bound to loopback. This is a local demonstration without authentication or public application hosting. Publishing the source code does not publish or secure a running service.
 
 ## Existing local services
 
-Use PowerShell in `C:\Users\khale\proofline-ai`:
+Use PowerShell from the repository root:
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8002
@@ -15,20 +75,21 @@ Use PowerShell in `C:\Users\khale\proofline-ai`:
 In a second terminal:
 
 ```powershell
-cd C:\Users\khale\proofline-ai\frontend
+cd frontend
+npm.cmd ci
 npm.cmd run dev
 ```
 
-Open http://localhost:5174. The existing welcome page checks `/api/health`, forwarded by Vite to `http://127.0.0.1:8002/health`. CORS allows `http://localhost:5174` and `http://127.0.0.1:5174`, including POST requests. The page checks on load; refresh after starting the backend. No frontend pipeline interface has been added.
+Open http://localhost:5174 for the dashboard. Vite forwards `/api` to the backend on port 8002. CORS allows `http://localhost:5174` and `http://127.0.0.1:5174`. The interface inspects persisted data; a newly provisioned database shows empty states until a sample or dataset is imported.
 
 Port 8000 was unavailable during Phase 1. The verified startup command intentionally omits `--reload`: its Windows worker failed with a named-pipe error in the execution environment. No administrator access, PowerShell activation, or execution-policy changes are required.
 
 ## PostgreSQL configuration
 
-PostgreSQL 18 is installed locally. Authenticated connections to `proofline_dev` and `proofline_test` have been verified. The two dedicated databases were created with explicit user permission during setup. Phase 3B upgrades both to Alembic revision `0003_schema_lateness` and preserves existing application rows. Credentials remain only in ignored local files.
+The verified local environment uses PostgreSQL 18 and dedicated `proofline_dev` and `proofline_test` databases. New installations must provision their own databases and credentials. The current schema head is `0007_reliability_lab`; later migrations preserve earlier application rows. Credentials remain only in ignored local files.
 
 1. The project databases are `proofline_dev` and `proofline_test`, as supplied by the user. Use your existing PostgreSQL login with access to these databases. No database creation is required if they already exist; this configuration step does not recreate or clear them.
-2. The project-root `.env` and `.env.test` files have been created with blank values if they did not already exist. Fill DATABASE_URL in `.env` for `proofline_dev` and TEST_DATABASE_URL in `.env.test` for `proofline_test`, using the placeholders in `.env.example`. Existing local files are preserved. This is the one setup step requiring credentials that the project cannot infer. Do not commit `.env` or share credentials in chat. Percent-encode special characters in URL credentials.
+2. Create project-root `.env` and `.env.test` from `.env.example` if absent. Fill DATABASE_URL in `.env` for `proofline_dev` and TEST_DATABASE_URL in `.env.test` for `proofline_test`. Existing local files are preserved. This is the one setup step requiring credentials that the project cannot infer. Do not commit `.env` or share credentials in chat. Percent-encode special characters in URL credentials.
 3. Install dependencies and apply the migration from the project root:
 
 ```powershell
@@ -108,6 +169,7 @@ From the project root:
 .\.venv\Scripts\python.exe -m compileall -q backend
 .\.venv\Scripts\python.exe -m pip check
 cd frontend
+npm.cmd test
 npm.cmd run build
 npm.cmd run lint
 ```
@@ -124,7 +186,7 @@ The existing dependency emits a Starlette/httpx deprecation warning during tests
 
 | Responsibility | Function / file |
 | --- | --- |
-| CSV parsing and original text preservation | `read_orders_csv()` in `backend/app/pipeline/ingestion.py` |
+| CSV parsing and original text preservation | `parse_orders_csv()` in `backend/app/pipeline/ingestion.py` |
 | Field validation, typed values, reason codes | `validate_order()` in `backend/app/pipeline/validation.py` |
 | Duplicate lookup among accepted IDs | `find_duplicate()` in `backend/app/pipeline/validation.py` |
 | Source evidence persistence | `persist_raw_orders()` in `backend/app/pipeline/service.py` |
@@ -137,7 +199,7 @@ The existing dependency emits a Starlette/httpx deprecation warning during tests
 
 ## Dependency recreation and deployment limit
 
-Use Python 3.13 or newer to create `.venv` with `-m venv .venv`. The working interpreter found on this machine is `C:\Users\khale\AppData\Local\Python\pythoncore-3.13-64\python.exe`. Install the exact verified Python dependencies with `backend/requirements-lock.txt`; `backend/requirements.txt` lists direct dependencies. In `frontend`, use `npm.cmd ci` to reproduce its lock file.
+Python 3.13.16 was verified in a completely fresh environment with system/user packages disabled. Installing `backend/requirements-lock.txt` installed all 38 pinned packages, including openpyxl and et_xmlfile. `backend/requirements.txt` lists direct dependencies. In `frontend`, use `npm.cmd ci` to reproduce its lock file. Keep direct requirements and the transitive lock synchronized.
 
 The production frontend build is checked for compilation only. Vite's proxy is development-only; production hosting will require routing `/api` to the backend. No commit or push is performed by setup.
 
@@ -154,6 +216,10 @@ Edit the ignored local files directly in your editor using your PostgreSQL usern
 
 Git ignores `.env` and all `.env.*` files except `.env.example`. The real local files are not added to Git. Do not use Git force-add on them. Never paste their contents into reports. Restart the backend after filling development settings; tests automatically read `.env.test` on their next run. Nonblank incorrect test credentials fail tests with a safe setup message; they do not silently skip. Configuration does not grant database permissions or change Windows security settings.
 
+
+## Implementation history
+
+The phase-by-phase notes below preserve how the project evolved. Earlier-stage limitations may be superseded by later sections; the overview, fresh setup and Phase 8 guide describe the current application.
 
 ## Phase 3A: evidence-based incidents
 
@@ -173,7 +239,7 @@ The original four table schemas are unchanged. Additive migration `0002_incident
 
 Completed pipeline counts still reconcile independently of incident status. A missing reporting record does not remove or change a clean source row. For example, 3 accepted clean records with 2 reporting records produce a one-record missing incident while the raw processing counts remain reconciled.
 
-There is at most one stored snapshot of each incident type per run. Repeated detection preserves existing evidence and IDs. API clients can only inspect incidents; there is no update, resolution, recovery, or replay endpoint. Database constraints enforce source/run references, known incident types/stages, positive affected counts, and unique incident types per run. Snapshots are preserved by service behavior; no database immutability trigger is claimed.
+There is at most one stored snapshot of each incident type per run. Repeated detection preserves existing evidence and IDs. Incident snapshots have no update/resolution or source-recovery endpoint. Later phases add read-only investigation and isolated replay-simulation endpoints, described below. Database constraints enforce source/run references, known incident types/stages, positive affected counts, and unique incident types per run. Snapshots are preserved by service behavior; no database immutability trigger is claimed.
 
 ### Controlled synthetic scenarios
 
@@ -302,7 +368,7 @@ The full suite retains the proofline_test-only connection guard, unique-schema P
 - `arrival_delay()` / `late_arrival_evidence()` — `backend/app/incidents/lateness.py`.
 - `persist_raw_orders()` saves the contract and arrival evidence; `detect_incidents()` persists snapshots using the existing API structure.
 
-Limitations: CSV logical types only; v2 must be selected explicitly; one ingestion timestamp per local batch; no streaming watermarks, clock-skew incident, or inference of times for legacy data. No LLM, recovery, replay, new infrastructure, or dashboard redesign is included.
+Limitations: CSV logical types only; v2 must be selected explicitly; one ingestion timestamp per local batch; no streaming watermarks, clock-skew incident, or inference of times for legacy data. That detection phase itself added no LLM, recovery, replay, new infrastructure, or dashboard redesign; subsequent phases below add the optional investigation adapter, replay simulation and dashboard.
 
 
 ## Phase 4: read-only record lineage and evidence tracing
@@ -532,7 +598,7 @@ AI_TIMEOUT_SECONDS=15
 
 Never put a real key in `.env.example` or chat. Choose a Responses/structured-output-capable model available to your account; no paid model is silently selected. Environment values take precedence over `.env`. Restart the backend after configuration changes. OPENAI_BASE_URL is not used; the adapter pins https://api.openai.com/v1. Credentials are never included in evidence packets.
 
-Live provider inference was **not tested** during implementation. Automated requests are mocked and tests disable AI by default. In this execution environment, direct import of the SDK's response resources encountered a Windows Application Control block on the native jiter dependency. The app and public SDK client import successfully, and the provider adapter handles the blocked resource as provider_sdk_unavailable. Windows security settings were not changed. Resolve runtime/package approval compatibility separately before relying on real provider calls; deterministic fallback remains usable.
+Live provider inference has **not been verified**. Automated provider responses are mocked and tests disable AI by default. An earlier local environment encountered an SDK resource import restriction; the later fresh dependency verification passed SDK imports, which is not evidence of a successful provider request. The adapter returns a labeled fallback for unavailable SDK resources, configuration or API failures. Windows security settings were not changed.
 
 Official reference: [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
 
@@ -563,7 +629,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8002/incidents/6c4cf732-da43-437
 Invoke-RestMethod http://127.0.0.1:8002/pipeline-runs/94aefef6-2c1d-49ec-a9c2-129b55489f6c/replays/c385007541a6adeee9895ef79addc6419d2b1b7c93643668adf28c04d6b1920f
 ```
 
-These are actual local development IDs, not seeded IDs for new installations. Restart an already-running backend to load routes. Ports remain 8002/5174; the React dashboard was not redesigned.
+These are actual local development IDs, not seeded IDs for new installations. Restart an already-running backend to load routes. Ports remain 8002/5174; the current React dashboard is described in Phase 7 below.
 
 ### Phase 6 verification and review map
 
@@ -578,7 +644,7 @@ Modules to review:
 - `backend/app/investigation/service.py`: grounding validation, fallback, and structured response rendering.
 - `backend/tests/test_replay_audit.py` and `backend/tests/test_investigation.py`: regression and integration coverage.
 
-Remaining limits: no free-form AI assertions, no independently retained investigation history, no signed audit trail, no automatic correction/recovery, and no live-provider success claim. Context truncation and absent historical evidence remain explicit unknowns. Phase 6 is left uncommitted; no push is performed.
+Remaining limits: no free-form AI assertions, no independently retained investigation history, no signed audit trail, no automatic correction/recovery, and no live-provider success claim. Context truncation and absent historical evidence remain explicit unknowns. Phase 6 and subsequent phases are preserved in the repository commit history.
 
 ## Phase 7: investigation dashboard
 
