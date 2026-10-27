@@ -579,3 +579,89 @@ Modules to review:
 - `backend/tests/test_replay_audit.py` and `backend/tests/test_investigation.py`: regression and integration coverage.
 
 Remaining limits: no free-form AI assertions, no independently retained investigation history, no signed audit trail, no automatic correction/recovery, and no live-provider success claim. Context truncation and absent historical evidence remain explicit unknowns. Phase 6 is left uncommitted; no push is performed.
+
+## Phase 7: investigation dashboard
+
+The React workspace reads real backend data: paginated pipeline runs, incident filters,
+evidence, SVG record lineage, investigations, replay simulations, and saved audit reports.
+Metric cards describe the loaded run page. Duplicate counts are a subset of rejected rows.
+
+From `C:\Users\khale\proofline-ai`, start the backend in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8002
+```
+
+In a second terminal:
+
+```powershell
+Set-Location C:\Users\khale\proofline-ai\frontend
+npm.cmd run dev
+```
+
+Open http://localhost:5174/. The existing `/api` proxy forwards to port 8002.
+Keep database URLs and provider keys backend-only in the ignored local environment files.
+No database migration is needed for Phase 7.
+
+Read-only discovery additions:
+
+- `GET /pipeline-runs?status=completed&limit=20&offset=0`: newest-first summaries and total.
+- `GET /incidents?sort=newest`: optional ordering; oldest-first remains the default.
+- `GET /pipeline-runs/{run_id}/replays?incident_id={incident_id}&limit=20&offset=0`:
+  integrity-checked scoped audit metadata and total.
+
+Changing scope clears previous results; obsolete responses are discarded. Loading, errors,
+empty responses, incomplete evidence and timeouts have explicit UI states. The lineage
+view separates recorded expectations, observations, intentional rejection, missing output,
+and unknown stages. It does not invent execution timestamps or root causes.
+
+Investigation requests default to local deterministic summaries, clearly labeled as not LLM
+inference. The provider checkbox explicitly requests the optional external provider. Only
+validated LLM-assisted responses receive that label. Phase 6 provider configuration and
+runtime limitations still apply. Diagnostic suggestions are never executed.
+
+Replay supports only existing missing-reporting and duplicate-processing operations. It
+saves an audit but applies no source correction. Review before/simulated-after counts,
+validation evidence, temporary incident checks, verification and saved reports. Old runs
+without required source contracts may safely reject replay; the rejection is displayed.
+Audit responses are checked against both the run and the selected incident.
+
+There is no automatic replay, polling, new detector, or public deployment. Additional runs
+are accessible through run-page navigation. The incident and audit lists are paginated.
+
+Frontend checks (from `frontend`):
+
+```powershell
+npm.cmd test
+npm.cmd run build
+npm.cmd run lint
+```
+
+Frontend tests mock API transport, including provider responses; they do not make real LLM
+calls. Backend PostgreSQL tests remain confined to fixture-owned schemas in `proofline_test`,
+with separate SQLite coverage. Run the existing backend pytest suite from the project root.
+If the default temporary location is unavailable, use a fresh ignored directory beneath
+`work` with pytest's `--basetemp` option. That directory is owned by pytest and must never
+contain project data.
+
+
+## Arabic interface and real UCI retail evaluation
+
+The dashboard now defaults to Arabic/RTL with an optional English language selector.
+It separates local synthetic demonstrations, the real 1,000-line UCI evaluation, and
+controlled faults injected into isolated copies of those real source lines.
+
+See [the UCI integration and Arabic dashboard guide](docs/uci-retail.md) for official
+attribution/license, pinned artifact checksums, line-identity mapping, actual results,
+repeatable import commands, controlled ground truth, replay guarantees and limitations.
+The UCI integration introduced migrations through `0006_reporting_collision_stage`; upgrades preserve existing data.
+
+## Phase 8 — Data Health, Business Impact and Reliability Lab
+
+Arabic/RTL health KPIs and recorded history now aggregate actual database rows. Incident impact
+reports distinguish verified UCI source-line values from unknown financial loss. Reliability Lab
+runs deterministic faults on private in-memory copies and saves only an integrity-checked audit
+report. Source pipeline records, incidents and existing replay audits remain unchanged.
+
+The current migration is `0007_reliability_lab`. See [the Phase 8 guide](docs/phase8-data-health.md)
+for API contracts, metric formulas, isolation guarantees, evidence checks, local commands and limits.
